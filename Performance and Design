@@ -1,0 +1,301 @@
+# AKS Pending Pods Troubleshooting Runbook
+
+## 1. Purpose
+
+This runbook explains how to identify, investigate, and troubleshoot Kubernetes pods stuck in the `Pending` state in Azure Kubernetes Service (AKS).
+
+The objective is to identify the root cause, restore pod scheduling, and prevent recurring capacity-related incidents.
+
+## 2. Scope
+
+- Platform: Azure Kubernetes Service (AKS)
+- Environment: Staging
+- Cluster: `uno-cluster-van`
+- Resource Group: `uno-van-rg`
+- Namespace: All affected namespaces
+
+**Important:** Perform initial investigation in staging. Do not make production changes without approval.
+
+## 3. Common Causes
+
+Pods may remain in Pending state because of:
+
+1. Insufficient CPU or memory.
+2. Node pool reaching maximum capacity.
+3. Node selectors or affinity mismatch.
+4. Untolerated node taints.
+5. Persistent Volume Claim (PVC) issues.
+6. Azure vCPU quota limitations.
+7. Cluster Autoscaler failures.
+
+## 4. Step-by-Step Troubleshooting
+
+### Step 1: Connect to the AKS cluster
+
+Open PowerShell.
+
+```powershell
+az login
+```
+
+Get AKS credentials:
+
+```powershell
+az aks get-credentials `
+  --resource-group uno-van-rg `
+  --name uno-cluster-van
+```
+
+Verify cluster connectivity:
+
+```powershell
+kubectl cluster-info
+```
+
+### Step 2: Identify Pending Pods
+
+Check pods across all namespaces:
+
+```powershell
+kubectl get pods -A
+```
+
+Filter Pending pods:
+
+```powershell
+kubectl get pods -A --field-selector=status.phase=Pending
+```
+
+Record:
+- Namespace
+- Pod name
+- Pod status
+- Time pending
+
+### Step 3: Describe the Pending Pod
+
+Run:
+
+```powershell
+kubectl describe pod <POD_NAME> -n <NAMESPACE>
+```
+
+Example:
+
+```powershell
+kubectl describe pod <POD_NAME> -n default
+```
+
+Check the Events section at the bottom.
+
+Common messages:
+
+- `Insufficient cpu`
+- `Insufficient memory`
+- `FailedScheduling`
+- `node(s) had untolerated taint`
+- `pod has unbound immediate PersistentVolumeClaims`
+
+### Step 4: Check Node Capacity
+
+Check node status:
+
+```powershell
+kubectl get nodes
+```
+
+Check CPU and memory usage:
+
+```powershell
+kubectl top nodes
+```
+
+Check pod resource requests and limits:
+
+```powershell
+kubectl describe nodes
+```
+
+Identify whether the nodes have enough available CPU and memory to schedule the pending pods.
+
+### Step 5: Check Node Pool Status
+
+List AKS node pools:
+
+```powershell
+az aks nodepool list `
+  --resource-group uno-van-rg `
+  --cluster-name uno-cluster-van `
+  -o table
+```
+
+Check:
+- Current node count
+- Minimum node count
+- Maximum node count
+- Autoscaling enabled or disabled
+- Node pool provisioning state
+
+If the node pool has reached its maximum size, investigate whether additional capacity is required.
+
+Do not increase node pool limits without checking Azure quota and obtaining approval.
+
+### Step 6: Check Cluster Autoscaler
+
+Check autoscaler status and related events:
+
+```powershell
+kubectl get events -A --sort-by='.lastTimestamp'
+```
+
+Check AKS autoscaler profile:
+
+```powershell
+az aks show `
+  --resource-group uno-van-rg `
+  --name uno-cluster-van `
+  --query autoScalerProfile `
+  -o yaml
+```
+
+Investigate:
+- Autoscaler failures
+- Maximum node count reached
+- Azure quota limitations
+- Unschedulable pods
+- Node pool scaling errors
+
+### Step 7: Check Taints and Tolerations
+
+Check node taints:
+
+```powershell
+kubectl describe nodes
+```
+
+Check pod configuration:
+
+```powershell
+kubectl get pod <POD_NAME> -n <NAMESPACE> -o yaml
+```
+
+Verify that the pod's tolerations and node selectors match the available node pools.
+
+Do not remove taints or change scheduling rules without approval.
+
+### Step 8: Check Persistent Volume Claims
+
+Check PVC status:
+
+```powershell
+kubectl get pvc -A
+```
+
+Describe the affected PVC:
+
+```powershell
+kubectl describe pvc <PVC_NAME> -n <NAMESPACE>
+```
+
+Investigate:
+- Pending PVCs
+- Storage provisioning failures
+- Storage class configuration
+- Azure disk or file availability
+
+### Step 9: Apply Approved Remediation
+
+Based on the identified root cause:
+
+| Issue | Recommended action |
+|---|---|
+| Insufficient CPU | Review resource requests and available capacity |
+| Insufficient memory | Review memory requests and node capacity |
+| Maximum node count reached | Request approved node pool capacity increase |
+| Autoscaler failure | Investigate autoscaler events and Azure quota |
+| Taint mismatch | Review node selectors and tolerations |
+| PVC Pending | Investigate storage provisioning |
+| Scheduling constraints | Review affinity and topology rules |
+
+**Important:** Do not delete pods, restart deployments, change production configurations, or scale node pools without appropriate approval.
+
+### Step 10: Verify Resolution
+
+After the approved remediation:
+
+```powershell
+kubectl get pods -A
+```
+
+Check the affected pod:
+
+```powershell
+kubectl get pod <POD_NAME> -n <NAMESPACE> -o wide
+```
+
+Expected result:
+
+- Pod status: `Running`
+- Pod scheduled on a node
+- No recurring scheduling errors
+- Application readiness checks successful
+
+### Step 11: Document the Incident
+
+Record the following information:
+
+- Date and time of incident
+- Affected namespace
+- Pod name
+- Root cause
+- Troubleshooting steps
+- Remediation performed
+- Verification result
+- Escalation details (if applicable)
+
+## 5. Escalation Procedure
+
+Escalate to the DevOps / On-call engineer when:
+
+1. Autoscaler cannot add nodes.
+2. Azure quota is exhausted.
+3. Multiple application pods remain Pending.
+4. Storage provisioning fails.
+5. The issue affects production workloads.
+
+Share the following:
+- Pod description output
+- Kubernetes events
+- Node status
+- Node pool status
+- Autoscaler error details
+
+## 6. Prevention
+
+- Monitor pending pods continuously.
+- Configure Azure Monitor alerts for pods pending longer than 5 minutes.
+- Monitor Cluster Autoscaler failures.
+- Review CPU and memory capacity regularly.
+- Maintain appropriate node pool minimum and maximum sizes.
+- Review node pool taints and tolerations.
+- Maintain sufficient Azure vCPU quota.
+
+## 7. Success Criteria
+
+- Pending pods are identified quickly.
+- Root cause is documented.
+- Approved remediation restores scheduling.
+- Application pods become Ready.
+- Recurring scheduling issues are monitored and prevented.
+
+## 8. References
+
+- Kubernetes Scheduling: https://kubernetes.io/docs/concepts/scheduling-eviction/
+- AKS Cluster Autoscaler: https://learn.microsoft.com/azure/aks/cluster-autoscaler
+- AKS Node Pools: https://learn.microsoft.com/azure/aks/create-node-pools
+
+**Document Owner:** DevOps Team
+
+**Environment:** Staging - uno-cluster-van
+
+**Status:** Initial Draft - Pending Review
